@@ -219,10 +219,10 @@ STATUS and CBARGS are ignored."
                                             shr-external-rendering-functions
                                             '((img . confluence--shr-image)
                                               (a . confluence--shr-a-tag)))))
-    ;; (confluence--log "Body:\n" page-html "\n")
     (with-current-buffer (get-buffer-create out-buffer)
       (setf buffer-read-only nil)
       (erase-buffer)
+      (insert "<title>" page-title "</title>")
       (insert page-html)
       (shr-render-region (point-min) (point-max))
       (setf buffer-read-only t)
