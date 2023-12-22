@@ -31,7 +31,7 @@ your `.authinfo` or `.authinfo.gpg` file:
 * `confluence-browser-url`: URL template to open a page in an external browser. You probably won't
   need to change this.
 
-* `confluence-buffer-name-style`: The page buffers are named "*Confluence: ?*" where ? is affected
+* `confluence-buffer-name-style`: The page buffers are named `*Confluence: ?*` where ? is affected
   by this setting. The default `page-id` makes buffer names shorters. With `page-title`, they are
   easier to find but can be very long.
   
