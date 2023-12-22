@@ -50,23 +50,121 @@
   "The host of the Confluence server.
 Usually has the form \"orgname.atlassian.net\".
 This name is also used to lookup credentials using `authsource'."
-  :type 'string)
+  :tag  "Confluence host name"
+  :type 'string
+  :group 'confluence-reader)
 
 (defcustom confluence-browser-url
   "https://%s/wiki%s"
   "The URL template to open a page in an external browser.
 It needs two %s, one for `confluence-host' and one for the rest of
 the URL as returned by the API when fetching the page."
-  :type
-  'string)
+  :tag  "Browser URL template"
+  :type 'string
+  :group 'confluence-reader)
 
-;; (defcustom confluence-fuzzy-link-detection t
-;;   "Use more lax logic to detect internal links.
-;; The default t, detects internal Confluence links by checking if
-;; \"href contains confluence-host\". When nil, only links with a
-;; data-linked-resource-id attribute are considered internal. I
-;; guess this depends on how the link was created."
-;;   :type 'boolean)
+(defcustom confluence-buffer-name-style
+  'page-title
+  "How to name Confluence page buffers:
+* Page ID: \"*Confluence page 12345\"
+* Title: \"*Confluence This is a title\""
+  :tag  "Buffer naming style"
+  :type
+  '(choice (const :tag "Page ID" page-id)
+           (const :tag "Page title" page-title))
+  :group 'confluence-reader)
+
+(defvar-keymap confluence-page-mode-map
+  "b" #'bookmark-set
+  "C-i" #'shr-next-link
+  "C-M-i" #'shr-previous-link
+  "<backtab>" #'shr-previous-link
+  "o" #'confluence-page--open-in-browser)
+
+(define-derived-mode confluence-page-mode special-mode "Confluence page mode"
+  "Mode for reading Confluence pages.
+After setting the mode, call `confluence-page-render' to display
+a v2 API page response.
+
+\\{confluence-page-mode-map}"
+  (setq-local revert-buffer-function #'confluence-page-reload)
+  ;; The following local variables are set in `confluence-page-render':
+  ;; link target to use to open the page in the browser
+  (make-local-variable 'confluence-page--browser-link)
+  ;; alist with the page info, to bookmark it
+  (make-local-variable 'confluence-page--bookmark)
+  ;; page id, used in `confluence-page-reload'
+  (make-local-variable 'confluence-page--page-id)
+  (setq-local imenu-create-index-function
+              #'confluence-page--collect-imenu-items))
+
+(defun confluence-page-render (page-data)
+  "Render PAGE-DATA, a Confluence API response."
+  (let ((inhibit-read-only t)
+        (page-id (gethash "id" page-data))
+        (page-title (gethash "title" page-data))
+        (browser-link (gethash "webui" (gethash "_links" page-data)))
+        ;; deep in the response, is the actual HTML
+        (page-html (gethash "value"
+                            (gethash "export_view"
+                                     (gethash "body" page-data))))
+        ;; define customizations to HTML rendering that apply to
+        ;; only to this mode
+        (shr-table-corner ?\+)
+        (shr-table-horizontal-line ?\-)
+        (shr-table-vertical-line ?\|)
+        (shr-external-rendering-functions (append
+                                           shr-external-rendering-functions
+                                           '((img . confluence--shr-image)
+                                             (a . confluence--shr-a-tag)))))
+    (erase-buffer) ;; in case of existing content (reload)
+    (insert "<title>" page-title "</title>")
+    (insert page-html)
+    (shr-render-region (point-min) (point-max))
+    (goto-char (point-min))
+    (setq-local confluence-page--page-id page-id)
+    (setq-local bookmark-make-record-function
+                #'confluence-bookmark-make-record)
+    (setq-local confluence-page--bookmark
+                `(,page-title
+                  ,@(bookmark-make-record-default t)
+                  (location . ,(format "Page ID: %s" page-id))
+                  (page-id . ,page-id)
+                  (handler . confluence-bookmark-jump)))))
+
+(defun confluence-page-reload (&arg no-confirm)
+  "Reload the current page.
+If NO-CONFIRM is t (interactively, the prefix arg), don't ask for
+confirmation.
+
+This command forces a new request to the server."
+  (interactive "P")
+  (when (or no-confirm
+            (yes-or-no-p "Reload the page from Confluence? "))
+    (confluence-page-by-id confluence-page--page-id)))
+
+(defun confluence-page--collect-imenu-items ()
+  "Return an alist for imenu usage.
+Currently this collects the positions of all links and headings in the page."
+  ;; This is unpackaged/imenu-eww-headings (see
+  ;; https://github.com/alphapapa/unpackaged.el).
+  (let ((faces '(shr-h1 shr-h2 shr-h3 shr-h4 shr-h5 shr-h6 shr-heading)))
+    (save-excursion
+      (save-restriction
+        (widen)
+        (goto-char (point-min))
+        (cl-loop for next-pos = (next-single-property-change (point) 'face)
+                 while next-pos
+                 do (goto-char next-pos)
+                 for face = (get-text-property (point) 'face)
+                 when (cl-typecase face
+                        (list (cl-intersection face faces))
+                        (symbol (member face faces)))
+                 collect (cons (buffer-substring-no-properties
+                                (point)
+                                (point-at-eol))
+                               (point))
+                 and do (forward-line 1))))))
 
 (defvar-keymap confluence--link-keymap
   :doc "Borrowed from `eww-link-keymap', handle intra-Confluence links
@@ -75,20 +173,12 @@ using this package."
   "RET" #'confluence--follow-link
   "<mouse-2>" #'confluence--follow-link)
 
-(defvar-local confluence--page-browser-link ""
-  "Link target to use to open the page in the browser.
-It is set when displaying a page.")
-
-;; Bookmark support "borrowed" from EWW
-(defvar-local confluence--page-bookmark nil
-  "Stores an alist with the page info, to bookmark it.
-It is created when displaying a page.")
-
 (defun confluence-bookmark-make-record ()
   "Return the bookmark created when displaying the page."
-  ;; the reason we created the record in advance, is that in that context
-  ;; we still have access to the parsed JSON to get the title, etc.
-  confluence--page-bookmark)
+  ;; the reason we create the record in advance, is that in that context we
+  ;; have the parsed JSON and have the title, page id, etc in local variables
+  ;; (we don't keep the whole parsed JSON around...)
+  confluence-page--bookmark)
 
 (defun confluence-bookmark-jump (bookmark)
   "Default BOOKMARK handler for Confluence pages."
@@ -208,56 +298,24 @@ manual for details."
   (pop-to-buffer buf-name))
 
 (defun confluence--page-callback (status &optional cbargs)
-  "Process the response of calling the seach endpoint.
+  "Process the response of calling the page endpoint.
 STATUS and CBARGS are ignored."
   (confluence--check-200-status)
   (let* ((parsed (json-parse-string (buffer-substring url-http-end-of-headers
                                                       (point-max))))
-         (page-title (gethash "title" parsed))
-         ;; deep in the response, is the actual HTML
-         (page-html (gethash "value"
-                             (gethash "export_view"
-                                      (gethash "body" parsed))))
-         (page-id (gethash "id" parsed))
-         (browser-link (gethash "webui" (gethash "_links" parsed)))
-         ;; consider using the title, but those can be too long
-         ;; for a sensible buffer name
-         (out-buffer (format "*Confluence page %s*" page-id))
-         ;; define customizations to HTML rendering that apply to
-         ;; only to this package
-         (shr-table-corner ?\+)
-         (shr-table-horizontal-line ?\-)
-         (shr-table-vertical-line ?\|)
-         (shr-external-rendering-functions (append
-                                            shr-external-rendering-functions
-                                            '((img . confluence--shr-image)
-                                              (a . confluence--shr-a-tag)))))
-    (with-current-buffer (get-buffer-create out-buffer)
-      (setf buffer-read-only nil)
-      (erase-buffer)
-      (insert "<title>" page-title "</title>")
-      (insert page-html)
-      (shr-render-region (point-min) (point-max))
-      (setf buffer-read-only t)
-      (goto-char (point-min))
-      (local-set-key (kbd "q") #'quit-window)
-      (local-set-key (kbd "b") #'bookmark-set)
-      (local-set-key (kbd "C-i") #'shr-next-link)
-      (local-set-key (kbd "C-M-i") #'shr-previous-link)
-      (local-set-key (kbd "<backtab>") #'shr-previous-link)
-      (local-set-key (kbd "o") #'confluence--open-in-browser)
-      (setq-local confluence--page-browser-link browser-link)
-      (setq-local bookmark-make-record-function
-                  #'confluence-bookmark-make-record)
-      (setq-local bookmark-make-record-function
-                  #'confluence-bookmark-make-record)
-      (setf confluence--page-bookmark
-            `(,(gethash "title" parsed)
-              ,@(bookmark-make-record-default t)
-              (location . ,(format "Page ID: %s" page-id))
-              (page-id . ,page-id)
-              (handler . confluence-bookmark-jump))))
-    (pop-to-buffer out-buffer)))
+        (page-buffer-name (confluence--page-buffer-name parsed)))
+    (with-current-buffer (get-buffer-create page-buffer-name)
+      (confluence-page-mode)
+      (confluence-page-render parsed))
+    (pop-to-buffer page-buffer-name)))
+
+(defun confluence--page-buffer-name (page-data)
+  "Return the buffer name for the page in PAGE-DATA.
+The string returned depends on the customization of
+`confluence-buffer-name-style'."
+  (if (eq confluence-buffer-name-style 'page-title)
+      (format "*Confluence: %s*" (gethash "title" page-data))
+    (format "*Confluence: ID %s*" (gethash "id" page-data))))
 
 (defun confluence--shr-image (dom &optional url)
   "Special version of `shr-tag-img' for this package.
@@ -329,17 +387,17 @@ A special text property is added when rendering the page, see
         (confluence-page-by-id page-id)
       (error "This doesn't seem to be a Confluence link"))))
 
-(defun confluence--open-in-browser ()
-  "Open this page in an external browser.
+(defun confluence-page--open-in-browser ()
+  "Open the current Confluence page in an external browser.
 Uses `browse-url-secondary-browser-function'. The full URL is put
 together using `confluence-host' and
-`confluence--page-browser-link', in the template
+`confluence-page--browser-link' in the template
 `confluence-browser-url'."
   (interactive)
   (funcall browse-url-secondary-browser-function
            (format confluence-browser-url
                    confluence-host
-                   confluence--page-browser-link)))
+                   confluence-page--browser-link)))
 
 ;;;###autoload
 (defun confluence-search (search-terms &optional prefix-arg)
