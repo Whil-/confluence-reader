@@ -8,6 +8,8 @@ heavens and all deities for that, most of the times the pages people create are 
 This package lets you read the "export" view of pages in an Emacs buffer, rendering them via `shr`
 (the same built-in library used by EWW), with some minor additions like bookmark support and a few
 commands for easier navigation.  
+You can also run a search directly from Emacs, getting a table with the pages that match. There's
+no context, unlike Confluence's search results, only titles. 
 
 ## Configuration 
 
@@ -32,8 +34,8 @@ your `.authinfo` or `.authinfo.gpg` file:
   need to change this.
 
 * `confluence-buffer-name-style`: The page buffers are named `*Confluence: ?*` where ? is affected
-  by this setting. The default `page-id` makes buffer names shorters. With `page-title`, they are
-  easier to find but can be very long.
+  by this setting. The default `page-id` makes buffer names shorter. With `page-title`, they are
+  easier to identify, but they can be very long.
   
 ### Usage
 
