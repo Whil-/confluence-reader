@@ -41,6 +41,7 @@
 (require 'auth-source)
 (require 'bookmark)
 (require 'cl-lib)
+(require 'shr)
 
 (defgroup confluence-reader nil
   "Search and read Confluence pages."
