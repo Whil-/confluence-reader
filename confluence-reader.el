@@ -107,7 +107,7 @@ a v2 API page response.
         (browser-link (gethash "webui" (gethash "_links" page-data)))
         ;; deep in the response, is the actual HTML
         (page-html (gethash "value"
-                            (gethash "export_view"
+                            (gethash "storage"
                                      (gethash "body" page-data))))
         ;; define customizations to HTML rendering that apply to
         ;; only to this mode
@@ -200,14 +200,10 @@ using this package."
 
 (defun confluence--get-auth-header ()
   "Return the auth header."
-  (if-let ((auth-info (car (auth-source-search :host confluence-host
-                                               :require '(:secret)))))
+  (if-let ((auth-info-password (auth-source-pick-first-password :host confluence-host)))
       (cons "Authorization"
-            (concat "Basic "
-                    (base64-encode-string
-                     (format "%s:%s" (plist-get auth-info :user)
-                             (auth-info-password auth-info))
-                     t)))
+            (concat "Bearer "
+                    auth-info-password))
     (error "Can't get auth info to call Confluence")))
 
 (defun confluence--request (callback target
@@ -412,7 +408,7 @@ Shows the results in a new buffer."
   (unless prefix-arg
     (setf search-terms (format "text ~ \"%s\"" search-terms)))
   (confluence--request #'confluence--search-callback
-                       (format "https://%s/wiki/rest/api/search"
+                       (format "https://%s/rest/api/content/search"
                                confluence-host)
                        nil
                        "GET"
@@ -425,13 +421,13 @@ Shows the results in a new buffer."
   "Load PAGE-ID from Confluence."
   (interactive "sPage ID: ")
   (confluence--request #'confluence--page-callback
-                       (format "https://%s/wiki/api/v2/pages/%s"
+                       (format "https://%s/rest/api/content/%s"
                                confluence-host
                                page-id)
                        nil
                        "GET"
                        nil
-                       '(("body-format". "export_view"))))
+                       '(("expand". "body.storage"))))
 
 ;;;###autoload
 (defun confluence-page-from-url (full-url)
